@@ -1,0 +1,6 @@
+Metric,Value
+True Positives,8.0
+False Negatives,2.0
+False Positives,5.0
+Precision,0.6153846153846154
+Recall,0.8
