@@ -14,21 +14,34 @@ def hungarian_algorithm(cmtr):
     
     return filtered_row_ind, filtered_col_ind
 
+def read_calibration_matrix(file_path):
+    with open(file_path, 'r') as f:
+        lines = f.readlines()
+        P2 = None
+        for line in lines:
+            data = line.strip().split()
+            numbers = np.array([float(n) for n in data])
+            P2 = np.append(P2, numbers) if P2 is not None else numbers
+        P2 = P2.reshape(3, 3)
+        return P2
 
 img_paths = []
 label_paths = []
+calib_paths = []
 
 img_dir = "KITTI_Selection/images/"
 label_dir = "KITTI_Selection/labels/"
+calib_dir = "KITTI_Selection/calib/"
 for filename in os.listdir(img_dir):
     if filename.endswith(".png"):
         img_paths.append(os.path.join(img_dir, filename))
         label_paths.append(os.path.join(label_dir, filename.replace(".png", ".txt")))
+        calib_paths.append(os.path.join(calib_dir, filename.replace(".png", ".txt")))
 
 model = YOLO("yolo11n.pt") 
 
 index = 0
-for img_path, label_path in zip(img_paths, label_paths):  
+for img_path, label_path, calib_path in zip(img_paths, label_paths, calib_paths):  
     gt_boxes = []
     det_boxes = []
     TP = 0
@@ -37,8 +50,15 @@ for img_path, label_path in zip(img_paths, label_paths):
     Precision = 0
     Recall = 0
     index = img_path.split("/")[-1].split(".")[0]
+    dist_gt = []
+    dist_dt = []
 
     canvas = cv2.imread(img_path)
+    kmatrix = read_calibration_matrix(calib_path)
+    cx = kmatrix[0, 2]
+    cy = kmatrix[1, 2]
+    fx = kmatrix[0, 0]
+    fy = kmatrix[1, 1]
     
     with open(label_path, 'r') as f:
         for gt_idx, line in enumerate(f):
@@ -48,7 +68,7 @@ for img_path, label_path in zip(img_paths, label_paths):
                 
             coords = [int(float(x)) for x in parts[1:5]]   
             gt_boxes.append(coords) 
-            dist_gt = float(parts[5])
+            dist_gt.append(float(parts[5]))
             cv2.rectangle(canvas, (coords[0], coords[1]), (coords[2], coords[3]), (0, 255, 0), 2)
                 
     results = model(img_path, verbose=False)
@@ -61,17 +81,24 @@ for img_path, label_path in zip(img_paths, label_paths):
             if class_id == 2: 
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 det_boxes.append([x1, y1, x2, y2])
+                u = (x1 + x2) / 2
+                v = y2
+                depth = (fy * 1.65) / (v - cy)
+                offset = depth * (u - cx) / fx
+                dist_dt.append(np.sqrt(depth**2 + offset**2))
                 cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
+    for calib_line in open(calib_path):
+        if calib_line.startswith("P2:"):
+            P2_values = list(map(float, calib_line.strip().split()[1:]))
+            P2 = np.array(P2_values).reshape(3, 4)
+            break
 
-    # Assuming you have lists: gt_boxes and dt_boxes
     if len(gt_boxes) == 0 or len(det_boxes) == 0:
-        # 1. Handle Metrics for empty cases
         TP = 0
-        FP = len(det_boxes) # Every detection is a False Positive if there are no GTs
-        FN = len(gt_boxes) # Every GT is a False Negative if YOLO detected nothing
+        FP = len(det_boxes)
+        FN = len(gt_boxes)
 
-        # 2. Skip the Hungarian Algorithm and Matrix logic
         match_GT, match_DT = [], [] 
         Ious = np.array([]) 
         
@@ -106,7 +133,7 @@ for img_path, label_path in zip(img_paths, label_paths):
         gt_ind = np.arange(num_gt)
         det_ind = np.arange(num_det)
 
-        TP = len(gt_ind)
+        TP = len(match_GT)
         FN = len(gt_ind) - len(match_GT)
         FP = len(det_ind) - len(match_DT)
 
@@ -126,7 +153,10 @@ for img_path, label_path in zip(img_paths, label_paths):
         results_list.append({
             'Ground Truth Coordinates': gt_boxes[gt_idx],
             'Detection Coordinates': det_boxes[dt_idx],
-            'IoU Value': Ious[gt_idx, dt_idx]
+            'IoU Value': Ious[gt_idx, dt_idx],
+            'Distance GT': dist_gt[gt_idx],
+            'Distance DT': dist_dt[dt_idx],
+            'Distance Error (m)': abs(dist_gt[gt_idx] - dist_dt[dt_idx]),
         })
         x1, y1, x2, y2 = gt_boxes[gt_idx]
         x_center = (x1 + x2) // 2
@@ -134,6 +164,16 @@ for img_path, label_path in zip(img_paths, label_paths):
         cv2.putText(canvas, f"{Ious[gt_idx, dt_idx]:.2f}", (x_center - 15, y_center + 5), cv2.FONT_HERSHEY_PLAIN, 1, (0, 255, 0), 2)
 
     iou_df = pd.DataFrame(results_list)
+
+    # plt.figure(figsize=(10, 6))
+    # plt.scatter(dist_gt_graph, dist_dt_graph, alpha=0.5)
+    # plt.plot([0, max(dist_gt_graph)], [0, max(dist_gt_graph)], color='red', linestyle='--')
+    # plt.xlabel('Ground Truth Distance (m)')
+    # plt.ylabel('Detected Distance (m)')
+    # plt.title('Detected vs Ground Truth Distances')
+    # plt.grid()
+    # plt.savefig('Evaluation/distance_comparison.png')
+    # plt.show()
 
     cv2.imwrite(f'GT_YOLO/scene_result_{index}.jpg', canvas)
     eval_data.to_csv(f'Evaluation/eval_scene_{index}.csv', index=False)

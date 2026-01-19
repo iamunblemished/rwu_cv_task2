@@ -1,2 +1,2 @@
-Ground Truth Coordinates,Detection Coordinates,IoU Value
-"[527, 175, 558, 203]","[526, 175, 559, 197]",0.7478070175438597
+Ground Truth Coordinates,Detection Coordinates,IoU Value,Distance GT,Distance DT,Distance Error (m)
+"[527, 175, 558, 203]","[526, 175, 559, 197]",0.7478070175438597,44.09707604638145,49.518270224329044,5.421194177947591
